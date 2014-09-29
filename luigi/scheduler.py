@@ -262,7 +262,8 @@ class CentralPlannerScheduler(Scheduler):
             task.expl = expl
 
     def add_worker(self, worker, info):
-        self._active_workers[worker].add_info(info)
+        worker = self._active_workers.setdefault(worker, Worker(worker))
+        worker.add_info(info)
 
     def update_resources(self, **resources):
         if self._resources is None:
@@ -299,7 +300,7 @@ class CentralPlannerScheduler(Scheduler):
             not self._has_resources(task.resources, used_resources)
         ))
 
-    def get_work(self, worker, host=None):
+    def get_work(self, worker, host=None, slave=False):
         # TODO: remove any expired nodes
 
         # Algo: iterate over all nodes, find the highest priority node no dependencies and available
@@ -323,7 +324,7 @@ class CentralPlannerScheduler(Scheduler):
         potential_workers = set([worker])
 
         for task_id, task in sorted(self._tasks.iteritems(), key=self._rank(worker), reverse=True):
-            if task.status == RUNNING and worker in task.workers:
+            if task.status == RUNNING and (worker in task.workers or slave):
                 # Return a list of currently running tasks to the client,
                 # makes it easier to troubleshoot
                 other_worker = self._active_workers[task.worker_running]
@@ -332,13 +333,13 @@ class CentralPlannerScheduler(Scheduler):
                     more_info.update(other_worker.info)
                 running_tasks.append(more_info)
 
-            if task.status == PENDING and worker in task.workers:
+            if task.status == PENDING and (worker in task.workers or slave):
                 locally_pending_tasks += 1
 
             if self._not_schedulable(task, potential_resources) or best_task:
                 continue
 
-            if worker in task.workers and self._has_resources(task.resources, used_resources):
+            if (worker in task.workers or slave) and self._has_resources(task.resources, used_resources):
                 best_task = task_id
             else:
                 # keep track of the resources used in greedy scheduling
@@ -347,6 +348,10 @@ class CentralPlannerScheduler(Scheduler):
                         potential_resources[resource] += amount
                     potential_workers.add(w)
 
+        reply = {'n_pending_tasks': locally_pending_tasks,
+                 'running_tasks': running_tasks,
+                 'task_id': None}
+
         if best_task:
             t = self._tasks[best_task]
             t.status = RUNNING
@@ -354,9 +359,11 @@ class CentralPlannerScheduler(Scheduler):
             t.time_running = time.time()
             self._update_task_history(best_task, RUNNING, host=host)
 
-        return {'n_pending_tasks': locally_pending_tasks,
-                'task_id': best_task,
-                'running_tasks': running_tasks}
+            reply['task_id'] = best_task
+            reply['task_family'] = t.family
+            reply['task_params'] = t.params
+
+        return reply
 
     def ping(self, worker):
         self.update(worker)

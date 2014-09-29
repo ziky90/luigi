@@ -57,29 +57,35 @@ def get_config():
     return configuration.get_config()
 
 
-def load_task(parent_task, task_name, params):
+def load_task(task_name, params, parent_task=None):
     """ Imports task and uses ArgParseInterface to initialize it
     """
-    # How the module is represented depends on if Luigi was started from
-    # that file or if the module was imported later on
-    module = sys.modules[parent_task.__module__]
-    if module.__name__ == '__main__':
-        parent_module_path = os.path.abspath(module.__file__)
-        for p in sys.path:
-            if parent_module_path.startswith(p):
-                end = parent_module_path.rfind('.py')
-                actual_module = parent_module_path[len(p):end].strip(
-                    '/').replace('/', '.')
-                break
+    if parent_task is not None:
+        # How the module is represented depends on if Luigi was started from
+        # that file or if the module was imported later on
+        module = sys.modules[parent_task.__module__]
+        if module.__name__ == '__main__':
+            parent_module_path = os.path.abspath(module.__file__)
+            for p in sys.path:
+                if parent_module_path.startswith(p):
+                    end = parent_module_path.rfind('.py')
+                    actual_module = parent_module_path[len(p):end].strip(
+                        '/').replace('/', '.')
+                    break
+        else:
+            actual_module = module.__name__
+            
     else:
-        actual_module = module.__name__
-    return init_task(actual_module, task_name, params, {})
+        actual_module = None
+
+    return init_task(task_name, params, {}, module_name=actual_module)
 
 
-def init_task(module_name, task, str_params, global_str_params):
-    __import__(module_name)
-    module = sys.modules[module_name]
-    Task = getattr(module, task)
+def init_task(task_name, str_params, global_str_params, module_name):
+    if module_name:
+        __import__(module_name)
+
+    Task = Register.get_task_cls(task_name)
 
     return Task.from_str_params(str_params, global_str_params)
 

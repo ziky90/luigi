@@ -141,7 +141,7 @@ class Worker(object):
 
     def __init__(self, scheduler=CentralPlannerScheduler(), worker_id=None,
                  worker_processes=1, ping_interval=None, keep_alive=None,
-                 wait_interval=None, max_reschedules=None):
+                 wait_interval=None, max_reschedules=None, slave=False):
         self._worker_info = self._generate_worker_info()
 
         if not worker_id:
@@ -175,6 +175,8 @@ class Worker(object):
         self.add_succeeded = True
         self.run_succeeded = True
         self.unfulfilled_counts = collections.defaultdict(int)
+
+        self.slave = slave
 
         class KeepAliveThread(threading.Thread):
             """ Periodically tell the scheduler that the worker still lives """
@@ -375,15 +377,17 @@ class Worker(object):
 
     def _get_work(self):
         logger.debug("Asking scheduler for work...")
-        r = self._scheduler.get_work(worker=self._id, host=self.host)
-        # Support old version of scheduler
-        if isinstance(r, tuple) or isinstance(r, list):
-            n_pending_tasks, task_id = r
-            running_tasks = []
-        else:
-            n_pending_tasks = r['n_pending_tasks']
-            task_id = r['task_id']
-            running_tasks = r['running_tasks']
+        r = self._scheduler.get_work(worker=self._id, host=self.host, slave=self.slave)
+
+        n_pending_tasks = r['n_pending_tasks']
+        task_id = r.get('task_id', None)
+        running_tasks = r['running_tasks']
+
+        if task_id is not None and task_id not in self._scheduled_tasks:
+            logger.info('Did not schedule %s, will load it dynamically', task_id)
+            self._scheduled_tasks[task_id] = \
+                interface.load_task(r['task_family'], r['task_params'])
+
         return task_id, running_tasks, n_pending_tasks
 
     def _run_task(self, task_id):
@@ -432,7 +436,7 @@ class Worker(object):
                 # Maybe it yielded something?
             new_deps = []
             if new_requirements:
-                new_req = [interface.load_task(task, name, params)
+                new_req = [interface.load_task(name, params, parent_task=task)
                            for name, params in new_requirements]
                 for t in new_req:
                     self.add(t)

@@ -25,6 +25,7 @@ import os
 import signal
 import luigi.notifications
 import tempfile
+from luigi.mock import MockFile, MockFileSystem
 luigi.notifications.DEBUG = True
 
 
@@ -602,6 +603,35 @@ class MultipleWorkersTest(unittest.TestCase):
 
     def test_kill_worker(self):
         luigi.build([SuicidalWorker(signal.SIGKILL)], workers=2, local_scheduler=True)
+
+
+class Dummy2Task(Task):
+    p = luigi.Parameter()
+
+    def output(self):
+        return MockFile(self.p)
+
+    def run(self):
+        f = self.output().open('w')
+        print >>f, 'knark'
+        f.close()
+        print MockFile.fs._data
+
+
+class SlaveTest(unittest.TestCase):
+    def setUp(self):
+        self.sch = CentralPlannerScheduler(retry_delay=100, remove_delay=1000, worker_disconnect_delay=10)
+        self.w = Worker(scheduler=self.sch, worker_id='X')
+        self.slave = Worker(scheduler=self.sch, worker_id='Y', slave=True)
+
+    def test_get_work(self):
+        d = Dummy2Task('123')
+        self.w.add(d)
+
+        self.assertFalse(d.complete())
+        self.slave.run()
+        self.assertTrue(d.complete())
+
 
 if __name__ == '__main__':
     unittest.main()
